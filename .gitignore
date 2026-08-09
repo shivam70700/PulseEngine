@@ -1,4 +1,31 @@
+# Dependencies
 node_modules/
+
+# Environment Variables & Secrets (CRITICAL)
 .env
-*.log
+.env.*
+
+# Build & Compiled Output
 dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Prisma Generated Output
+/src/generated/prisma/
+
+# Local AI Assistants & IDE Metadata
+.agents/
+.claude/
+.windsurf/
+.vscode/
+.idea/
+skills-lock.json
+
+# OS Generated Files
+.DS_Store
+Thumbs.db
