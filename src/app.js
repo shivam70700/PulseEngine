@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { errorHandler } from './middlewares/errorHandler.js';
 import eventRoutes from './routes/eventRoutes.js'; 
+import { prisma } from './config/db.js';
 
 const app = express();
 
@@ -15,6 +16,21 @@ app.use(express.json()); // Body parser
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'UP', timestamp: new Date().toISOString() });
 });
+
+app.get('/health/db', async (req, res, next) => {
+  try {
+    const userCount = await prisma.user.count();
+    const eventCount = await prisma.event.count();
+    res.json({
+      status: 'UP',
+      database: 'PostgreSQL (Docker)',
+      counts: { users: userCount, events: eventCount }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 
 // Mount Routes
 app.use('/api/v1/events', eventRoutes); // <-- Added
