@@ -1,17 +1,13 @@
 import { Router } from 'express';
 import { validate } from '../middlewares/validate.js';
-import { createEventSchema } from './schemas/eventSchema.js';
+import { createEventSchema } from '../validations/eventSchema.js';
+import { createEvent, getEvents } from '../controllers/eventController.js';
 
 const router = Router();
 
-// Endpoint to create a flash sale event
-router.post('/', validate(createEventSchema), (req, res) => {
-  // If request hits this controller, data is 100% guaranteed to be valid!
-  res.status(201).json({
-    success: true,
-    message: 'Event schema validated successfully!',
-    data: req.body,
-  });
-});
+router
+  .route('/')
+  .post(validate(createEventSchema), createEvent)
+  .get(getEvents);
 
 export default router;
