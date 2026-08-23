@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import { errorHandler } from './middlewares/errorHandler.js';
 import eventRoutes from './routes/eventRoutes.js'; 
 import { prisma } from './config/db.js';
+import authRoutes from './routes/authRoutes.js';
 
 const app = express();
 
@@ -34,6 +35,10 @@ app.get('/health/db', async (req, res, next) => {
 
 // Mount Routes
 app.use('/api/events', eventRoutes); // <-- Added
+
+// auth routes
+app.use('/api/auth', authRoutes);
+app.use('/api/events', eventRoutes);
 
 // Global Error Handler
 app.use(errorHandler);
