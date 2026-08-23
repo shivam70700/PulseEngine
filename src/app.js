@@ -33,7 +33,7 @@ app.get('/health/db', async (req, res, next) => {
 
 
 // Mount Routes
-app.use('/api/v1/events', eventRoutes); // <-- Added
+app.use('/api/events', eventRoutes); // <-- Added
 
 // Global Error Handler
 app.use(errorHandler);
