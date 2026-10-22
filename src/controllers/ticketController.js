@@ -1,6 +1,11 @@
 import { prisma } from "../config/db.js";
-import { reserveTicketAtomic, seedEventStock } from "../config/redis.js";
+import {
+  reserveTicketAtomic,
+  seedEventStock,
+  getEventStock,
+} from "../config/redis.js";
 import { ticketQueue } from "../queues/ticketQueue.js";
+import { getIO } from "../config/socket.js";
 
 /**
  * @desc   Reserve a ticket with high-concurrency Redis check & queue
@@ -31,8 +36,19 @@ export const reserveTicket = async (req, res, next) => {
       remainingStock = await reserveTicketAtomic(eventId);
     }
 
-    // 3. If stock <= 0 (-1), immediately return HTTP 409 Conflict
+    const io = getIO();
+    const timestamp = new Date().toISOString();
+
+    // 3. If stock <= 0 (-1), immediately emit SOLD_OUT and return HTTP 409 Conflict
     if (remainingStock === -1) {
+      if (io) {
+        io.emit("ticket:update", {
+          type: "SOLD_OUT",
+          eventId,
+          timestamp,
+        });
+      }
+
       return res.status(409).json({
         success: false,
         status: "SOLD_OUT",
@@ -40,12 +56,22 @@ export const reserveTicket = async (req, res, next) => {
       });
     }
 
-    // 4. If result >= 0, enqueue job in BullMQ and immediately return HTTP 202 Accepted
+    // 4. If result >= 0, enqueue job in BullMQ, emit QUEUED, and return HTTP 202 Accepted
     if (remainingStock >= 0) {
       const job = await ticketQueue.add("reserve", {
         userId: req.user.id,
         eventId,
       });
+
+      if (io) {
+        io.emit("ticket:update", {
+          type: "QUEUED",
+          eventId,
+          jobId: job.id,
+          remainingRedisStock: remainingStock,
+          timestamp,
+        });
+      }
 
       return res.status(202).json({
         success: true,
@@ -114,6 +140,129 @@ export const getMyTickets = async (req, res, next) => {
       success: true,
       count: tickets.length,
       data: tickets,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc   Simulate a live high-concurrency flash sale stress test
+ * @route  POST /api/tickets/simulate
+ */
+export const simulateFlashSale = async (req, res, next) => {
+  try {
+    const { eventId, concurrentRequests = 100 } = req.body;
+    const totalRequests = Number(concurrentRequests) || 100;
+
+    if (!eventId) {
+      return res.status(400).json({
+        success: false,
+        message: "eventId is required",
+      });
+    }
+
+    // 1. Ensure demo user exists in PostgreSQL
+    const demoUser = await prisma.user.upsert({
+      where: { email: "demo@pulseengine.com" },
+      update: {},
+      create: {
+        email: "demo@pulseengine.com",
+        name: "Demo Concurrency User",
+        password: "demopasswordhash123",
+        role: "USER",
+      },
+    });
+
+    // 2. Ensure Redis key is seeded if not present
+    const existingStock = await getEventStock(eventId);
+    if (existingStock === null) {
+      const event = await prisma.event.findUnique({
+        where: { id: eventId },
+        select: { id: true, availableCount: true },
+      });
+
+      if (!event) {
+        return res.status(404).json({
+          success: false,
+          message: "Event not found",
+        });
+      }
+
+      await seedEventStock(event.id, event.availableCount);
+    }
+
+    const io = getIO();
+    const startTime = Date.now();
+
+    // 3. Define single reservation execution
+    const executeSingleReservation = async () => {
+      try {
+        const remainingStock = await reserveTicketAtomic(eventId);
+        const timestamp = new Date().toISOString();
+
+        if (remainingStock === -1) {
+          if (io) {
+            io.emit("ticket:update", {
+              type: "SOLD_OUT",
+              eventId,
+              timestamp,
+            });
+          }
+          return { accepted: false, status: "SOLD_OUT" };
+        }
+
+        if (remainingStock >= 0) {
+          const job = await ticketQueue.add("reserve", {
+            userId: demoUser.id,
+            eventId,
+          });
+
+          if (io) {
+            io.emit("ticket:update", {
+              type: "QUEUED",
+              eventId,
+              jobId: job.id,
+              remainingRedisStock: remainingStock,
+              timestamp,
+            });
+          }
+
+          return {
+            accepted: true,
+            status: "QUEUED",
+            jobId: job.id,
+            remainingRedisStock: remainingStock,
+          };
+        }
+
+        return { accepted: false, status: "ERROR" };
+      } catch (err) {
+        return { accepted: false, status: "ERROR", error: err.message };
+      }
+    };
+
+    // 4. Fire all requests concurrently with Promise.all
+    const tasks = Array.from({ length: totalRequests }, () =>
+      executeSingleReservation(),
+    );
+    const results = await Promise.all(tasks);
+    const durationMs = Date.now() - startTime;
+
+    // 5. Aggregate metrics
+    const acceptedInRedis = results.filter((r) => r.accepted).length;
+    const rejectedSoldOut = results.filter(
+      (r) => r.status === "SOLD_OUT",
+    ).length;
+
+    res.status(200).json({
+      success: true,
+      summary: {
+        totalRequests,
+        acceptedInRedis,
+        rejectedSoldOut,
+        durationMs,
+      },
     });
   } catch (error) {
     next(error);
