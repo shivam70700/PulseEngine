@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PulseEngine — Distributed Flash-Sale Concurrency Lab</title>
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              400: '#818cf8',
+              500: '#6366f1',
+              600: '#4f46e5',
+              900: '#312e81',
+            },
+            darkBg: '#090D16',
+            cardBg: '#111827',
+            cardBorder: '#1F2937',
+          },
+          fontFamily: {
+            mono: ['JetBrains Mono', 'Fira Code', 'Menlo', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <!-- Socket.io client -->
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    /* Custom scrollbar for terminal */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #090D16;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #374151;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #4B5563;
+    }
+    @keyframes pulse-slow {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.7; transform: scale(1.05); }
+    }
+    .animate-pulse-slow {
+      animation: pulse-slow 3s infinite ease-in-out;
+    }
+  </style>
+</head>
+<body class="bg-darkBg text-gray-100 min-h-screen flex flex-col font-sans antialiased selection:bg-brand-500 selection:text-white">
+
+  <!-- Header -->
+  <header class="border-b border-cardBorder bg-cardBg/80 backdrop-blur-md sticky top-0 z-30 px-4 lg:px-8 py-3.5">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="h-9 w-9 rounded-lg bg-gradient-to-tr from-brand-600 to-cyan-400 flex items-center justify-center shadow-lg shadow-brand-500/20">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="font-extrabold text-lg tracking-tight bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-transparent">PulseEngine</span>
+            <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-brand-500/20 text-brand-400 border border-brand-500/30">v1.0 LAB</span>
+          </div>
+          <p class="text-xs text-gray-400">High-Concurrency Distributed Flash-Sale Lab</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-4">
+        <!-- WebSocket Live Connection Badge -->
+        <div id="wsBadge" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-xs font-medium text-emerald-400">
+          <span class="relative flex h-2 w-2">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+          </span>
+          <span id="wsStatusText">Socket.io Connected</span>
+        </div>
+
+        <!-- Refresh Button -->
+        <button id="refreshBtn" onclick="loadEvents()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-xs font-medium text-gray-300 transition-colors">
+          <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          Refresh
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="max-w-7xl mx-auto w-full px-4 lg:px-8 py-6 flex-1 flex flex-col gap-6">
+
+    <!-- Event Selector & Demo Seeder Bar -->
+    <div class="p-4 rounded-xl bg-cardBg border border-cardBorder shadow-sm flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-1">
+        <label for="eventSelect" class="text-xs font-semibold text-gray-400 uppercase tracking-wider whitespace-nowrap">Target Event:</label>
+        <div class="relative w-full sm:w-80">
+          <select id="eventSelect" onchange="onEventSelected()" class="w-full bg-gray-900 border border-gray-700 text-gray-200 text-sm rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-500 focus:outline-none transition-all cursor-pointer">
+            <option value="" disabled selected>Loading events...</option>
+          </select>
+        </div>
+        <div id="eventDetailBadge" class="hidden text-xs text-gray-400 bg-gray-900 px-3 py-1.5 rounded-lg border border-gray-800 flex items-center gap-2">
+          <span>Price: <strong id="badgeTicketPrice" class="text-gray-200">$149.99</strong></span>
+          <span class="text-gray-600">•</span>
+          <span id="badgeEventStatus" class="text-emerald-400 font-medium">Sale Active</span>
+        </div>
+      </div>
+
+      <!-- Quick Demo Seeder Button -->
+      <button id="createDemoBtn" onclick="createDemoEvent()" class="flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-purple-600 to-brand-600 hover:from-purple-500 hover:to-brand-500 text-white text-xs font-semibold shadow-md transition-all">
+        <svg class="w-4 h-4 text-purple-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        Create Demo Coldplay Event (50 Tickets)
+      </button>
+    </div>
+
+    <!-- 1. Top Metrics Bar -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+      <!-- Total Capacity -->
+      <div class="p-5 rounded-xl bg-cardBg border border-cardBorder shadow-sm relative overflow-hidden group">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total Capacity</span>
+          <span class="p-2 rounded-lg bg-gray-800 text-gray-400">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            </svg>
+          </span>
+        </div>
+        <div class="mt-3 flex items-baseline gap-2">
+          <span id="metricTotalCapacity" class="text-3xl font-extrabold text-white tracking-tight">--</span>
+          <span class="text-xs text-gray-500">tickets</span>
+        </div>
+        <div class="mt-2 text-xs text-gray-400">Initial batch allocation</div>
+        <div class="absolute bottom-0 left-0 right-0 h-1 bg-gray-700/50"></div>
+      </div>
+
+      <!-- Redis Atomic Stock -->
+      <div class="p-5 rounded-xl bg-cardBg border border-cyan-500/30 shadow-sm relative overflow-hidden group bg-gradient-to-b from-cyan-950/10 to-transparent">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold text-cyan-400 uppercase tracking-wider">Redis Atomic Stock</span>
+          <span class="p-2 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+          </span>
+        </div>
+        <div class="mt-3 flex items-baseline gap-2">
+          <span id="metricRedisStock" class="text-3xl font-extrabold text-cyan-300 tracking-tight">--</span>
+          <span class="text-xs text-cyan-400/70">in-memory</span>
+        </div>
+        <div class="mt-2 text-xs text-cyan-400/60 font-mono">event:stock:${id} (atomic DECR)</div>
+        <div class="absolute bottom-0 left-0 right-0 h-1 bg-cyan-500 shadow-sm shadow-cyan-500"></div>
+      </div>
+
+      <!-- PostgreSQL Confirmed -->
+      <div class="p-5 rounded-xl bg-cardBg border border-emerald-500/30 shadow-sm relative overflow-hidden group bg-gradient-to-b from-emerald-950/10 to-transparent">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold text-emerald-400 uppercase tracking-wider">PostgreSQL Confirmed</span>
+          <span class="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </span>
+        </div>
+        <div class="mt-3 flex items-baseline gap-2">
+          <span id="metricPostgresConfirmed" class="text-3xl font-extrabold text-emerald-300 tracking-tight">--</span>
+          <span class="text-xs text-emerald-400/70">tickets in DB</span>
+        </div>
+        <div class="mt-2 text-xs text-emerald-400/60 font-mono">ACID Tx worker commit</div>
+        <div class="absolute bottom-0 left-0 right-0 h-1 bg-emerald-500 shadow-sm shadow-emerald-500"></div>
+      </div>
+
+      <!-- Sold Out Rejections -->
+      <div class="p-5 rounded-xl bg-cardBg border border-rose-500/30 shadow-sm relative overflow-hidden group bg-gradient-to-b from-rose-950/10 to-transparent">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold text-rose-400 uppercase tracking-wider">Sold Out Rejections</span>
+          <span class="p-2 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </span>
+        </div>
+        <div class="mt-3 flex items-baseline gap-2">
+          <span id="metricSoldOutCount" class="text-3xl font-extrabold text-rose-400 tracking-tight">0</span>
+          <span class="text-xs text-rose-400/70">HTTP 409</span>
+        </div>
+        <div class="mt-2 text-xs text-rose-400/60 font-mono">Fast-fail before PostgreSQL</div>
+        <div class="absolute bottom-0 left-0 right-0 h-1 bg-rose-500 shadow-sm shadow-rose-500"></div>
+      </div>
+    </div>
+
+    <!-- 2. Action Control Panel -->
+    <div class="p-6 rounded-xl bg-cardBg border border-cardBorder shadow-md flex flex-col gap-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-base font-bold text-white flex items-center gap-2">
+            <span>Action Control Panel</span>
+            <span class="text-xs font-normal text-gray-400">(Live High-Concurrency Stress Test)</span>
+          </h2>
+          <p class="text-xs text-gray-400 mt-0.5">Test real-time atomic inventory locking and asynchronous persistence queue</p>
+        </div>
+        <div id="actionSpinner" class="hidden items-center gap-2 text-xs text-brand-400 font-medium">
+          <svg class="animate-spin h-4 w-4 text-brand-500" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+          </svg>
+          <span>Executing Burst...</span>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <!-- Button 1: Buy 1 Ticket -->
+        <button id="btnBuyOne" onclick="buyOneTicket()" class="flex items-center justify-center gap-2.5 px-4 py-3 rounded-lg bg-gray-800 hover:bg-gray-700 active:bg-gray-900 border border-gray-700 text-white font-medium text-sm transition-all shadow-sm">
+          <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+          </svg>
+          Buy 1 Ticket
+        </button>
+
+        <!-- Button 2: Fire 100 Concurrent Requests -->
+        <button id="btnFireBurst" onclick="fireBurst100()" class="flex items-center justify-center gap-2.5 px-4 py-3 rounded-lg bg-gradient-to-r from-orange-600 via-rose-600 to-pink-600 hover:from-orange-500 hover:via-rose-500 hover:to-pink-500 active:scale-[0.99] text-white font-bold text-sm transition-all shadow-lg shadow-rose-500/20">
+          <svg class="w-5 h-5 text-yellow-300 animate-pulse" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M12.395 2.553a1 1 0 00-1.45-.385c-.345.23-.614.558-.822.88-.316.492-.53 1.056-.7 1.62-.27.896-.44 1.848-.56 2.766a22.18 22.18 0 01-.157 1.034c-.114.618-.215 1.258-.336 1.876-.118-.328-.242-.647-.378-.952-.313-.7-.687-1.343-1.12-1.921a1 1 0 00-1.637.28c-.378.852-.585 1.792-.585 2.749 0 3.866 3.134 7 7 7s7-3.134 7-7c0-2.457-1.144-4.646-2.92-6.046a1 1 0 00-.735-.184c-.38.05-.758.125-1.13.22-.38.096-.757.215-1.127.357-.15-.466-.334-.925-.544-1.37z" clip-rule="evenodd" />
+          </svg>
+          🔥 Fire 100 Concurrent Requests
+        </button>
+
+        <!-- Button 3: Reset Stock to 50 -->
+        <button id="btnResetStock" onclick="resetStock()" class="flex items-center justify-center gap-2.5 px-4 py-3 rounded-lg bg-gray-800 hover:bg-gray-700 active:bg-gray-900 border border-gray-700 text-gray-200 font-medium text-sm transition-all shadow-sm">
+          <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          🔄 Reset Stock to 50
+        </button>
+      </div>
+
+      <!-- Live Benchmark Results Banner (Appears after simulation) -->
+      <div id="simResultsBanner" class="hidden mt-1 p-4 rounded-lg bg-gray-900 border border-gray-800">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+          <div class="flex items-center gap-2">
+            <span class="h-2.5 w-2.5 rounded-full bg-brand-500"></span>
+            <span class="text-xs font-bold uppercase tracking-wider text-gray-300">Burst Execution Benchmark:</span>
+          </div>
+          <div class="flex flex-wrap items-center gap-6 text-xs">
+            <div>Execution Time: <strong id="simDuration" class="text-brand-400 text-sm font-mono font-bold">-- ms</strong></div>
+            <div>Accepted in Redis: <strong id="simAccepted" class="text-cyan-400 text-sm font-mono font-bold">--</strong></div>
+            <div>Fast-Fail Sold Out: <strong id="simRejected" class="text-rose-400 text-sm font-mono font-bold">--</strong></div>
+            <div>Est. Throughput: <strong id="simThroughput" class="text-emerald-400 text-sm font-mono font-bold">-- req/s</strong></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. Live Event Stream Terminal -->
+    <div class="rounded-xl bg-cardBg border border-cardBorder shadow-lg flex flex-col overflow-hidden">
+      <!-- Terminal Header -->
+      <div class="px-4 py-3 bg-gray-900 border-b border-cardBorder flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <div class="flex items-center gap-1.5">
+            <div class="w-3 h-3 rounded-full bg-red-500/80"></div>
+            <div class="w-3 h-3 rounded-full bg-yellow-500/80"></div>
+            <div class="w-3 h-3 rounded-full bg-green-500/80"></div>
+          </div>
+          <span class="ml-2 font-mono text-xs text-gray-400 font-medium">Live Event Stream (Socket.io ticket:update)</span>
+          <span id="logCounterBadge" class="ml-2 px-1.5 py-0.5 rounded text-[10px] font-mono bg-gray-800 text-gray-400 border border-gray-700">0 events</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <label class="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+            <input type="checkbox" id="autoScrollCheck" checked class="rounded border-gray-700 text-brand-500 focus:ring-0 cursor-pointer" />
+            <span>Auto-scroll</span>
+          </label>
+          <button onclick="clearTerminal()" class="px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-[11px] text-gray-300 font-mono transition-colors">
+            Clear
+          </button>
+        </div>
+      </div>
+
+      <!-- Terminal Body -->
+      <div id="terminalStream" class="h-80 overflow-y-auto p-4 font-mono text-xs space-y-1.5 bg-[#070B12]">
+        <div class="text-gray-500 italic">Connected to WebSocket. Awaiting live reservations or burst simulation events...</div>
+      </div>
+    </div>
+
+    <!-- 4. Architecture Explainer Footer -->
+    <footer class="mt-4 pt-6 border-t border-cardBorder">
+      <div class="mb-4">
+        <h3 class="text-sm font-bold text-gray-300 uppercase tracking-wider">How PulseEngine Solves Concurrency</h3>
+        <p class="text-xs text-gray-500">Core architectural guarantees powering zero overselling and ultra-low latency</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <!-- Card 1 -->
+        <div class="p-4 rounded-xl bg-cardBg border border-cardBorder">
+          <div class="flex items-center gap-2 text-cyan-400 font-semibold text-xs mb-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            1. Atomic Redis Lua Scripting
+          </div>
+          <p class="text-xs text-gray-400 leading-relaxed">
+            Every reservation request executes an atomic Lua script directly in Redis memory. If stock is available, it decrements in &lt;1ms. If stock is zero, it immediately returns HTTP 409 without touching the SQL database.
+          </p>
+        </div>
+
+        <!-- Card 2 -->
+        <div class="p-4 rounded-xl bg-cardBg border border-cardBorder">
+          <div class="flex items-center gap-2 text-brand-400 font-semibold text-xs mb-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            </svg>
+            2. Asynchronous BullMQ Queue
+          </div>
+          <p class="text-xs text-gray-400 leading-relaxed">
+            Successful Redis reservations return an HTTP 202 Accepted response in milliseconds and enqueue a background job. Users aren't held blocking on heavy database disk I/O, eliminating connection pool exhaustion.
+          </p>
+        </div>
+
+        <!-- Card 3 -->
+        <div class="p-4 rounded-xl bg-cardBg border border-cardBorder">
+          <div class="flex items-center gap-2 text-emerald-400 font-semibold text-xs mb-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+            </svg>
+            3. ACID PostgreSQL Persistence
+          </div>
+          <p class="text-xs text-gray-400 leading-relaxed">
+            Worker processes consume queued jobs and execute an isolated <code class="text-emerald-300">prisma.$transaction</code> with row locks. In case of any DB failure, Redis stock is safely rolled back via <code class="text-emerald-300">incrementEventStock</code>.
+          </p>
+        </div>
+      </div>
+    </footer>
+  </main>
+
+  <!-- JavaScript Logic -->
+  <script>
+    let currentEvent = null;
+    let eventsList = [];
+    let logCounter = 0;
+    let soldOutRejections = 0;
+    let socket = null;
+
+    // Initialize Socket.io
+    function initWebSocket() {
+      try {
+        socket = io();
+
+        socket.on('connect', () => {
+          updateWSStatus(true);
+          appendLog('SYSTEM', 'Connected to real-time Socket.io server (Session ID: ' + socket.id + ')', 'gray');
+        });
+
+        socket.on('disconnect', () => {
+          updateWSStatus(false);
+          appendLog('SYSTEM', 'Disconnected from Socket.io server. Retrying...', 'yellow');
+        });
+
+        socket.on('ticket:update', (payload) => {
+          handleTicketUpdate(payload);
+        });
+      } catch (err) {
+        console.error('Socket.io init error:', err);
+        updateWSStatus(false);
+      }
+    }
+
+    function updateWSStatus(connected) {
+      const badge = document.getElementById('wsBadge');
+      const text = document.getElementById('wsStatusText');
+      if (connected) {
+        badge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-xs font-medium text-emerald-400';
+        text.innerText = 'Socket.io Connected';
+      } else {
+        badge.className = 'flex items-center gap-2 px-3 py-1.5 rounded-full bg-rose-500/10 border border-rose-500/20 text-xs font-medium text-rose-400';
+        text.innerText = 'Socket.io Offline';
+      }
+    }
+
+    // Handle incoming ticket:update events
+    function handleTicketUpdate(payload) {
+      // Only process updates for the currently selected event (or all if none selected)
+      if (currentEvent && payload.eventId && payload.eventId !== currentEvent.id) {
+        return;
+      }
+
+      const timestamp = new Date(payload.timestamp || Date.now()).toLocaleTimeString() + '.' + String(new Date().getMilliseconds()).padStart(3, '0');
+
+      if (payload.type === 'QUEUED') {
+        // Update in-memory Redis stock counter immediately
+        if (typeof payload.remainingRedisStock === 'number') {
+          updateMetricDisplay('metricRedisStock', payload.remainingRedisStock);
+        }
+        appendLog('REDIS QUEUED', `Job #${payload.jobId} -> Atomic DECR succeeded! Remaining Redis stock: ${payload.remainingRedisStock}`, 'cyan', timestamp);
+      } else if (payload.type === 'CONFIRMED') {
+        // Increment confirmed tickets in PostgreSQL
+        const currentConfirmed = parseInt(document.getElementById('metricPostgresConfirmed').innerText, 10) || 0;
+        updateMetricDisplay('metricPostgresConfirmed', currentConfirmed + 1);
+        appendLog('POSTGRES ACID', `Ticket Confirmed #${payload.ticketId} (Job #${payload.jobId}) committed to PostgreSQL`, 'emerald', timestamp);
+      } else if (payload.type === 'SOLD_OUT') {
+        soldOutRejections++;
+        updateMetricDisplay('metricSoldOutCount', soldOutRejections);
+        appendLog('FAST-FAIL 409', `Stock depleted! HTTP 409 Rejected in <1ms without touching database`, 'rose', timestamp);
+      }
+    }
+
+    function appendLog(tag, message, color, timeStr) {
+      logCounter++;
+      document.getElementById('logCounterBadge').innerText = logCounter + ' events';
+
+      const terminal = document.getElementById('terminalStream');
+      const time = timeStr || (new Date().toLocaleTimeString() + '.' + String(new Date().getMilliseconds()).padStart(3, '0'));
+
+      let tagColorClass = 'text-gray-400';
+      let tagBgClass = 'bg-gray-800 border-gray-700';
+
+      if (color === 'cyan') {
+        tagColorClass = 'text-cyan-300';
+        tagBgClass = 'bg-cyan-950/60 border-cyan-500/30 text-cyan-400';
+      } else if (color === 'emerald') {
+        tagColorClass = 'text-emerald-300';
+        tagBgClass = 'bg-emerald-950/60 border-emerald-500/30 text-emerald-400';
+      } else if (color === 'rose') {
+        tagColorClass = 'text-rose-400';
+        tagBgClass = 'bg-rose-950/60 border-rose-500/30 text-rose-400';
+      } else if (color === 'yellow') {
+        tagColorClass = 'text-yellow-400';
+        tagBgClass = 'bg-yellow-950/60 border-yellow-500/30 text-yellow-400';
+      }
+
+      const logRow = document.createElement('div');
+      logRow.className = 'flex items-start gap-2.5 hover:bg-gray-900/60 px-1 py-0.5 rounded transition-colors';
+      logRow.innerHTML = `
+        <span class="text-gray-500 shrink-0 font-mono text-[11px]">${time}</span>
+        <span class="px-1.5 py-0.5 rounded border text-[10px] font-bold uppercase shrink-0 font-mono ${tagBgClass}">${tag}</span>
+        <span class="text-gray-300 font-mono break-all">${message}</span>
+      `;
+
+      terminal.appendChild(logRow);
+
+      if (document.getElementById('autoScrollCheck').checked) {
+        terminal.scrollTop = terminal.scrollHeight;
+      }
+    }
+
+    function clearTerminal() {
+      document.getElementById('terminalStream').innerHTML = '<div class="text-gray-500 italic">Terminal cleared.</div>';
+      logCounter = 0;
+      document.getElementById('logCounterBadge').innerText = '0 events';
+    }
+
+    function updateMetricDisplay(elementId, value) {
+      const el = document.getElementById(elementId);
+      if (el) {
+        el.innerText = value;
+      }
+    }
+
+    // Load Events from API
+    async function loadEvents() {
+      try {
+        const res = await fetch('/api/events');
+        const json = await res.json();
+
+        if (json.success && Array.isArray(json.data)) {
+          eventsList = json.data;
+          renderEventSelector();
+        }
+      } catch (err) {
+        console.error('Failed to load events:', err);
+      }
+    }
+
+    function renderEventSelector() {
+      const select = document.getElementById('eventSelect');
+      const createBtn = document.getElementById('createDemoBtn');
+
+      if (!eventsList || eventsList.length === 0) {
+        select.innerHTML = '<option value="" disabled selected>No events found. Click button to seed demo event.</option>';
+        createBtn.classList.remove('hidden');
+        resetMetrics();
+        return;
+      }
+
+      select.innerHTML = '';
+      eventsList.forEach((ev, i) => {
+        const opt = document.createElement('option');
+        opt.value = ev.id;
+        opt.innerText = `${ev.title} (${ev.availableCount}/${ev.totalTickets} tickets left)`;
+        if (i === 0) opt.selected = true;
+        select.appendChild(opt);
+      });
+
+      // Select first event
+      currentEvent = eventsList[0];
+      displayEventMetrics(currentEvent);
+    }
+
+    function onEventSelected() {
+      const select = document.getElementById('eventSelect');
+      const selectedId = select.value;
+      const found = eventsList.find(e => e.id === selectedId);
+      if (found) {
+        currentEvent = found;
+        displayEventMetrics(found);
+      }
+    }
+
+    function displayEventMetrics(ev) {
+      if (!ev) return;
+      document.getElementById('metricTotalCapacity').innerText = ev.totalTickets;
+      document.getElementById('metricRedisStock').innerText = typeof ev.redisStock === 'number' ? ev.redisStock : ev.availableCount;
+      document.getElementById('metricPostgresConfirmed').innerText = ev.totalTickets - ev.availableCount;
+      document.getElementById('badgeTicketPrice').innerText = `$${ev.ticketPrice}`;
+      document.getElementById('eventDetailBadge').classList.remove('hidden');
+    }
+
+    function resetMetrics() {
+      document.getElementById('metricTotalCapacity').innerText = '--';
+      document.getElementById('metricRedisStock').innerText = '--';
+      document.getElementById('metricPostgresConfirmed').innerText = '--';
+      document.getElementById('metricSoldOutCount').innerText = '0';
+      document.getElementById('eventDetailBadge').classList.add('hidden');
+      soldOutRejections = 0;
+    }
+
+    // Action 1: Buy 1 Ticket
+    async function buyOneTicket() {
+      if (!currentEvent) {
+        alert('Please select or create an event first.');
+        return;
+      }
+
+      const btn = document.getElementById('btnBuyOne');
+      btn.disabled = true;
+      btn.classList.add('opacity-50', 'cursor-not-allowed');
+
+      try {
+        const res = await fetch('/api/tickets/simulate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            eventId: currentEvent.id,
+            concurrentRequests: 1,
+          }),
+        });
+
+        const json = await res.json();
+        if (json.success && json.summary) {
+          if (json.summary.acceptedInRedis > 0) {
+            appendLog('HTTP CLIENT', 'Buy 1 Ticket successful! Enqueued to BullMQ worker.', 'cyan');
+          } else {
+            appendLog('HTTP CLIENT', 'Buy 1 Ticket rejected: Sold out (HTTP 409).', 'rose');
+          }
+        }
+      } catch (err) {
+        appendLog('ERROR', 'Buy 1 Ticket error: ' + err.message, 'rose');
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove('opacity-50', 'cursor-not-allowed');
+      }
+    }
+
+    // Action 2: Fire 100 Concurrent Requests (Flash Sale Burst)
+    async function fireBurst100() {
+      if (!currentEvent) {
+        alert('Please select or create an event first.');
+        return;
+      }
+
+      const btn = document.getElementById('btnFireBurst');
+      const spinner = document.getElementById('actionSpinner');
+      btn.disabled = true;
+      btn.classList.add('opacity-50', 'cursor-not-allowed');
+      spinner.classList.remove('hidden');
+      spinner.classList.add('flex');
+
+      appendLog('BURST INITIATED', `Firing 100 parallel requests concurrently against Redis atomic gatekeeper...`, 'yellow');
+
+      try {
+        const res = await fetch('/api/tickets/simulate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            eventId: currentEvent.id,
+            concurrentRequests: 100,
+          }),
+        });
+
+        const json = await res.json();
+
+        if (json.success && json.summary) {
+          const { totalRequests, acceptedInRedis, rejectedSoldOut, durationMs } = json.summary;
+          const throughput = durationMs > 0 ? Math.round((totalRequests / (durationMs / 1000))) : totalRequests * 100;
+
+          // Display banner
+          document.getElementById('simDuration').innerText = `${durationMs} ms`;
+          document.getElementById('simAccepted').innerText = acceptedInRedis;
+          document.getElementById('simRejected').innerText = rejectedSoldOut;
+          document.getElementById('simThroughput').innerText = `${throughput} req/s`;
+          document.getElementById('simResultsBanner').classList.remove('hidden');
+
+          appendLog('BURST COMPLETED', `100 requests finished in ${durationMs}ms: ${acceptedInRedis} Accepted in Redis, ${rejectedSoldOut} Fast-Fail Sold Out. Throughput: ${throughput} req/s`, 'emerald');
+        } else {
+          appendLog('ERROR', 'Simulation returned error: ' + (json.message || 'Unknown error'), 'rose');
+        }
+      } catch (err) {
+        appendLog('ERROR', 'Burst simulation error: ' + err.message, 'rose');
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove('opacity-50', 'cursor-not-allowed');
+        spinner.classList.add('hidden');
+        spinner.classList.remove('flex');
+      }
+    }
+
+    // Action 3: Reset Stock to 50
+    async function resetStock() {
+      if (!currentEvent) {
+        alert('Please select or create an event first.');
+        return;
+      }
+
+      const btn = document.getElementById('btnResetStock');
+      btn.disabled = true;
+      btn.classList.add('opacity-50', 'cursor-not-allowed');
+
+      try {
+        const res = await fetch(`/api/events/${currentEvent.id}/reset`, {
+          method: 'POST',
+        });
+
+        const json = await res.json();
+        if (json.success) {
+          soldOutRejections = 0;
+          document.getElementById('metricSoldOutCount').innerText = '0';
+          document.getElementById('metricRedisStock').innerText = json.data.totalTickets;
+          document.getElementById('metricPostgresConfirmed').innerText = '0';
+          document.getElementById('simResultsBanner').classList.add('hidden');
+
+          appendLog('RESET STOCK', `Event stock reset to ${json.data.totalTickets}. Database tickets cleared & Redis counter restored.`, 'emerald');
+          await loadEvents();
+        } else {
+          appendLog('ERROR', 'Reset failed: ' + (json.message || 'Unknown error'), 'rose');
+        }
+      } catch (err) {
+        appendLog('ERROR', 'Reset stock error: ' + err.message, 'rose');
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove('opacity-50', 'cursor-not-allowed');
+      }
+    }
+
+    // Helper: Obtain Admin Token & Create Demo Coldplay Event
+    async function createDemoEvent() {
+      const btn = document.getElementById('createDemoBtn');
+      btn.disabled = true;
+      btn.innerText = 'Creating demo event...';
+
+      try {
+        let token = null;
+
+        // Try to register admin demo user
+        try {
+          const regRes = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: 'PulseEngine Admin',
+              email: 'admin@pulseengine.com',
+              password: 'AdminPassword123!',
+              role: 'ADMIN',
+            }),
+          });
+          const regJson = await regRes.json();
+          if (regJson.data && regJson.data.token) {
+            token = regJson.data.token;
+          }
+        } catch (_) {}
+
+        // If user exists, log in
+        if (!token) {
+          const loginRes = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: 'admin@pulseengine.com',
+              password: 'AdminPassword123!',
+            }),
+          });
+          const loginJson = await loginRes.json();
+          if (loginJson.data && loginJson.data.token) {
+            token = loginJson.data.token;
+          }
+        }
+
+        if (!token) {
+          throw new Error('Failed to authenticate as ADMIN');
+        }
+
+        // Create Coldplay demo event
+        const createRes = await fetch('/api/events', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            title: 'Coldplay — Music of the Spheres World Tour',
+            description: 'Exclusive 50-ticket flash sale demo for high-concurrency lab testing.',
+            totalTickets: 50,
+            ticketPrice: 149.99,
+            saleStartTime: new Date().toISOString(),
+          }),
+        });
+
+        const createJson = await createRes.json();
+        if (createJson.success) {
+          appendLog('DEMO SEEDED', `Created demo event "${createJson.data.title}" with 50 tickets. Redis stock seeded!`, 'emerald');
+          await loadEvents();
+        } else {
+          appendLog('ERROR', 'Failed to create event: ' + createJson.message, 'rose');
+        }
+      } catch (err) {
+        appendLog('ERROR', 'Create demo event error: ' + err.message, 'rose');
+      } finally {
+        btn.disabled = false;
+        btn.innerText = 'Create Demo Coldplay Event (50 Tickets)';
+      }
+    }
+
+    // Bootstrap dashboard
+    window.addEventListener('DOMContentLoaded', () => {
+      initWebSocket();
+      loadEvents();
+    });
+  </script>
+</body>
+</html>
