@@ -6,6 +6,7 @@ import eventRoutes from "./routes/eventRoutes.js";
 import { prisma } from "./config/db.js";
 import { redis } from "./config/redis.js";
 import authRoutes from "./routes/authRoutes.js";
+import ticketRoutes from "./routes/ticketRoutes.js";
 
 const app = express();
 
@@ -54,6 +55,7 @@ app.get("/health/db", async (req, res, next) => {
 // Mount Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/events", eventRoutes);
+app.use("/api/tickets", ticketRoutes);
 
 // Global Error Handler
 app.use(errorHandler);
