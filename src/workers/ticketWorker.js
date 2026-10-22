@@ -1,6 +1,7 @@
 import { Worker } from "bullmq";
 import { prisma } from "../config/db.js";
 import { redisConfig, incrementEventStock } from "../config/redis.js";
+import { getIO } from "../config/socket.js";
 
 export let ticketWorker = null;
 
@@ -50,6 +51,18 @@ export const initTicketWorker = () => {
 
           return createdTicket;
         });
+
+        // Emit real-time WebSocket event for confirmed reservation
+        const io = getIO();
+        if (io) {
+          io.emit("ticket:update", {
+            type: "CONFIRMED",
+            eventId,
+            jobId: job.id,
+            ticketId: ticket.id,
+            timestamp: new Date().toISOString(),
+          });
+        }
 
         return ticket;
       } catch (error) {

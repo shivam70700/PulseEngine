@@ -6,6 +6,7 @@ import {
   reserveTicket,
   getJobStatus,
   getMyTickets,
+  simulateFlashSale,
 } from "../controllers/ticketController.js";
 
 const router = Router();
@@ -13,5 +14,6 @@ const router = Router();
 router.post("/reserve", protect, validate(reserveTicketSchema), reserveTicket);
 router.get("/job/:jobId", protect, getJobStatus);
 router.get("/my-tickets", protect, getMyTickets);
+router.post("/simulate", simulateFlashSale);
 
 export default router;
