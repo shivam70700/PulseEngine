@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import { correlationMiddleware } from "./middlewares/correlationMiddleware.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import eventRoutes from "./routes/eventRoutes.js";
 import { prisma } from "./config/db.js";
@@ -9,6 +10,9 @@ import authRoutes from "./routes/authRoutes.js";
 import ticketRoutes from "./routes/ticketRoutes.js";
 
 const app = express();
+
+// Trace correlation ID across async execution contexts
+app.use(correlationMiddleware);
 
 // Global Middlewares
 app.use(helmet()); // Security headers
